@@ -1,0 +1,44 @@
+/*
+ * Name:   <your name>
+ * ID:     <your ID number>
+ * Course: ECNG 3006 - Microprocessors 2
+ * Lab 0:  Flash an LED on PB02 (A1) using FreeRTOS and direct register access
+ */
+
+#include <sam.h>
+#include <FreeRTOS_SAMD21.h>
+
+#define LED_PIN_MASK    (1u << 2)       /* PB02 = group 1, bit 2 */
+#define LED_PERIOD_MS   2000u
+
+static void led_init(void)
+{
+    PORT->Group[1].DIRSET.reg = LED_PIN_MASK;   /* PB02 as output */
+    PORT->Group[1].OUTCLR.reg = LED_PIN_MASK;   /* start with LED off */
+}
+
+static void led_task(void *pvParameters)
+{
+    (void)pvParameters;
+
+    for (;;)
+    {
+        PORT->Group[1].OUTTGL.reg = LED_PIN_MASK;   /* toggle PB02 */
+        vTaskDelay(pdMS_TO_TICKS(LED_PERIOD_MS));
+    }
+}
+
+int main(void)
+{
+    led_init();
+
+    xTaskCreate(led_task, "LED", 256, NULL, 1, NULL);
+    vTaskStartScheduler();
+
+    for (;;) { }    /* never reached */
+}
+
+/* Required by FreeRTOS_SAMD21: its idle hook calls loop() */
+void loop(void)
+{
+}
