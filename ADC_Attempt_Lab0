@@ -1,0 +1,105 @@
+/*
+ * Name:   <your name>
+ * ID:     <your ID number>
+ * Course: ECNG 3006 - Microprocessors 2
+ * Lab 0:  Read ADC channel AIN4 (PA04 / A3) repeatedly with FreeRTOS.
+ *         LED on PB02 turns on when the input is above half scale.
+ */
+
+#include <sam.h>
+#include <FreeRTOS_SAMD21.h>
+
+#define LED_PIN_MASK        (1u << 2)       /* PB02 (A1)                      */
+#define ADC_PIN_NUM         4u              /* PA04 = A3 = AIN4               */
+#define PMUX_FUNC_B         0x1u            /* peripheral function B (ADC)    */
+#define ADC_GCLK_ID         0x1Eu           /* GCLK_ADC                       */
+#define ADC_MUXPOS_AIN4     0x04u
+#define ADC_MUXNEG_GND      0x18u           /* internal ground                */
+#define ADC_FULL_SCALE      4095u           /* 12-bit                         */
+#define ADC_THRESHOLD       (ADC_FULL_SCALE / 2u)
+#define SAMPLE_PERIOD_MS    100u
+
+static void led_init(void)
+{
+    PORT->Group[1].DIRSET.reg = LED_PIN_MASK;
+    PORT->Group[1].OUTCLR.reg = LED_PIN_MASK;
+}
+
+static void adc_init(void)
+{
+    /* Clocks: bus clock, then core clock from generator 0 (48 MHz) */
+    PM->APBCMASK.reg |= PM_APBCMASK_ADC;
+    GCLK->CLKCTRL.reg = GCLK_CLKCTRL_ID(ADC_GCLK_ID) |
+                        GCLK_CLKCTRL_GEN_GCLK0 |
+                        GCLK_CLKCTRL_CLKEN;
+    while (GCLK->STATUS.bit.SYNCBUSY) { }
+
+    /* Route PA04 to the ADC (pin 4 is even, so it uses PMUXE of PMUX[2]) */
+    PORT->Group[0].PINCFG[ADC_PIN_NUM].bit.PMUXEN = 1;
+    PORT->Group[0].PMUX[ADC_PIN_NUM / 2u].bit.PMUXE = PMUX_FUNC_B;
+
+    /* Reference VDDANA/2 with gain 1/2 gives a full scale of about VDDANA */
+    ADC->REFCTRL.reg   = ADC_REFCTRL_REFSEL_INTVCC1;
+    ADC->INPUTCTRL.reg = ADC_INPUTCTRL_MUXPOS(ADC_MUXPOS_AIN4) |
+                         ADC_INPUTCTRL_MUXNEG(ADC_MUXNEG_GND) |
+                         ADC_INPUTCTRL_GAIN_DIV2;
+    ADC->CTRLB.reg     = ADC_CTRLB_PRESCALER_DIV32 |      /* 48 MHz / 32 = 1.5 MHz */
+                         ADC_CTRLB_RESSEL_12BIT;
+    ADC->SAMPCTRL.reg  = ADC_SAMPCTRL_SAMPLEN(31u);       /* longer sampling for 10 kohm source */
+    while (ADC->STATUS.bit.SYNCBUSY) { }
+
+    ADC->CTRLA.reg = ADC_CTRLA_ENABLE;
+    while (ADC->STATUS.bit.SYNCBUSY) { }
+}
+
+static uint16_t adc_read(void)
+{
+    uint16_t result;
+
+    ADC->SWTRIG.reg = ADC_SWTRIG_START;
+    while (ADC->STATUS.bit.SYNCBUSY) { }
+    while (!ADC->INTFLAG.bit.RESRDY) { }      /* wait for conversion */
+
+    result = ADC->RESULT.reg;
+    ADC->INTFLAG.reg = ADC_INTFLAG_RESRDY;    /* clear the flag */
+    return result;
+}
+
+static void adc_task(void *pvParameters)
+{
+    uint16_t sample;
+    (void)pvParameters;
+
+    for (;;)
+    {
+        sample = adc_read();
+
+        if (sample > ADC_THRESHOLD)
+        {
+            PORT->Group[1].OUTSET.reg = LED_PIN_MASK;
+        }
+        else
+        {
+            PORT->Group[1].OUTCLR.reg = LED_PIN_MASK;
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(SAMPLE_PERIOD_MS));
+    }
+}
+
+/* Required by the FreeRTOS_SAMD21 idle hook */
+#ifdef __cplusplus
+extern "C"
+#endif
+void loop(void) { }
+
+int main(void)
+{
+    led_init();
+    adc_init();
+
+    xTaskCreate(adc_task, "ADC", 256, NULL, 1, NULL);
+    vTaskStartScheduler();
+
+    for (;;) { }
+}
